@@ -1,0 +1,101 @@
+---
+title: "Machine Learning Project"
+author: "Lindsay Justice"
+date: "August 6, 2018"
+output: html_document
+---
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it.
+
+The data used comes from accelerometers on the belt, forearm, arm, and dumbell of 6 participants who were asked to perform barbell lifts correctly and incorrectly in 5 different ways. The goal is to develop a machine learning algorithm used to predict 'classe' based on these measurements. 
+
+## Data Cleanup
+
+```{r, warning=FALSE, message=FALSE}
+test <- read.csv("pml-testing.csv")
+train <- read.csv("pml-training.csv")
+
+str(train)
+
+table(colSums(is.na(train)|train=="")/dim(train)[[1]])
+```
+
+A first look at the train dataset shows that some of the variables have mostly NA values. The above table shows that 100 variables are approximately 98% NA or blank values, so we will remove them from the dataset. Additionally, the first 7 variables in the data set are discriptive of the individual performing the activity (timestamp, username, etc.), so we will also remove those variables from both the train and test datasets. It is important to note that we are removing the same columns from the train and test datasets. 
+
+We also create a data partition within the new train dataset to use for validation. 
+
+``` {r, warning=FALSE, message=FALSE}
+library(caret)
+new_train <- train[,-c(1:7,which(colSums(is.na(train)|train=="")/dim(train)[[1]] > 0))]
+
+# Remove the same columns for the test set 
+new_test <- test[,-c(1:7,which(colSums(is.na(train)|train=="")/dim(train)[[1]] > 0))]
+
+set.seed(72518)
+train.1 <- createDataPartition(new_train$classe, p = .6, list = FALSE)
+train1 <- new_train[train.1,]
+validation <- new_train[-train.1,]
+
+dim(train1)
+dim(validation)
+
+```
+
+We will train five different models in the following section: gradient boosting, random forest, classification trees, linear discriminant analysis (LDA), and combined predictors model made up of the the boosting, random forest, and LDA models. We will then compare the accuracy of these models from their respective confusion matrices. We will use k-fold cross-validation with 5 folds to improve efficiency in the model fitting.
+
+## Model Fitting
+
+``` {r, warning=FALSE, message=FALSE}
+
+# Set up machine for parallel processing to cut down on time
+library(e1071) 
+library(parallel)
+library(doParallel)
+library(caret)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+
+# Train with boosting
+mod_gbm <- train(classe~., data = train1, method = "gbm", trControl = fitControl, verbose = FALSE)
+pred_gbm <- predict(mod_gbm, validation)
+cf_gbm <- confusionMatrix(validation$classe, pred_gbm)
+
+# Train with random forest
+mod_rf <- train(classe~., data = train1, method = "rf", trControl = fitControl)
+pred_rf <- predict(mod_rf, validation)
+cf_rf <- confusionMatrix(validation$classe, pred_rf)
+
+# Train with classification tree 
+mod_tree <- train(classe~., data = train1, method = "rpart", trControl = fitControl, model = TRUE)
+library(rpart)
+library(rattle)
+fancyRpartPlot(mod_tree$finalModel)
+pred_tree <- predict(mod_tree, validation)
+cf_tree <- confusionMatrix(validation$classe, pred_tree)
+
+# Train with LDA
+mod_lda <- train(classe~., data = train1, method = "lda")
+pred_lda <- predict(mod_lda, validation)
+cf_lda <- confusionMatrix(validation$classe, pred_lda)
+
+# Train using combined predictors from previous 5 models
+predDF <- data.frame(pred_rf, pred_gbm, pred_lda, classe = validation$classe)
+combModFit <- train(classe ~ ., method = "rf", data = predDF, trControl = fitControl)
+combPred <- predict(combModFit, predDF)
+cf_comb <- confusionMatrix(validation$classe, combPred)
+
+# Compare accuracy of all models
+accuracy <- c(cf_gbm$overall[1], cf_rf$overall[1], cf_tree$overall[1],  cf_lda$overall[1], cf_comb$overall[1])
+cbind(c("Gradient Boosting", "Random Forest", "Classication Tree", "LDA", "Combined Predictors"), accuracy)
+```
+
+The model with the highest accuracy is the combined predictors model, but only marginally better than random forest. For the sake of simplicity, we will use the random forest model to predict the classe of the test data set.
+
+``` {r}
+# Predict on test dataset
+predict(mod_rf, new_test)
+
+```
